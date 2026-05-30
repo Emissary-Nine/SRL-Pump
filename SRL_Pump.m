@@ -1,0 +1,118 @@
+clc; clear; close all;
+
+% SRL Liquids Pump calculator, written by Carson Gano
+%   Define inputs of mass flow, RPM, tank and injector pressure
+%   efficiency, fluid vapor pressure.
+
+%   After running once, a table will be produced of candidate Ku and D2
+%   values which must then be selected in the geometry calc section.
+%   These two variables are interlinked, where Ku falls between a set range
+%   and D2 is calculated based on the given Ku value. 
+
+%   Calculated delta P should be slightly above require delta P, too large
+%   of a difference can lead to inefficiencies in the pump.
+
+
+%% Design inputs
+
+mdotSI = 1.4;                 % kg/s
+rhoSI = 840;                  % Jet-A at room temp (range 775-840)
+RPM = 30000;                  % RPM
+P_tank = 100;                  % psi
+P_inject = 530;               % psi
+eta = 0.75;                   % Efficiency factor, based on centrifugal pump design (source needed)
+P_vapor = 0.14;               % Jet-A vapor pressure (psi)
+
+% -- Conversions, constants, and intermittent calcs --
+
+QSI = mdotSI / rhoSI;         % m^3/s 
+mdotI = mdotSI * 2.20462;     % lb/s
+GPM = QSI * 15850.32;         % GPM
+omega = RPM * 0.10472;        % rad/s
+dP = (P_inject - P_tank);     % psi
+SG = rhoSI / (1000);          % SG of input fluid
+
+%% Calculations
+
+HP = (GPM * (dP))/(1714 * eta);            % Horsepower
+P_kW = (HP * 745) / 1000;                  % kW
+H_ft = (2.31 * (dP)) / SG;                 % ft
+
+Ns = (RPM * GPM^0.5) / (H_ft^0.75);        % Specific speed
+
+% -- Sizing --
+
+Ku_vals = linspace(0.8,1.2,20);            % High head radial is usually 0.8 - 1.1
+D2_vals = zeros(size(Ku_vals));            
+U2 = zeros(size(Ku_vals));
+
+for i = 1:length(Ku_vals)
+    Ku = Ku_vals(i);
+    
+    % Diameter (inches)
+    D2_vals(i) = (1840 * Ku * sqrt(H_ft)) / RPM;
+end
+
+table(Ku_vals', D2_vals')                 % Display candidate Ku and OD (inch) values
+
+
+for i = 1:length(Ku_vals)
+    U2(i) = (pi * (D2_vals(i)/12) * RPM) / 60;
+end
+
+table(D2_vals',U2')                       % Diameter (in) and corresponding tip speed (ft/s)
+
+%% Geometry Calculations
+
+% Based on values from tables, choose D2 and corresponding Ku
+% Limit tip speed to decrease cavitation and stress fracture risk
+
+% -- Inputs --
+
+o = 3;  % <-- D2 Ku and U2 selection
+D2 = D2_vals(o);
+Ku = Ku_vals(o);
+U2 = U2(o);
+phi = 0.1;                   % Estimate, 0.08-0.15 range, must refine later
+Z = 6;                       % Number of blades
+t = 0.1;                    % Blade thickness (in)
+eta2 = 0.8;                  % Scaling fudge factor for geometry (range 0.8-1.0)
+beta = 45;                   % Impeller blade discharge angle (deg)
+
+% -- Vane height --
+
+Cm2 = phi*U2;                                           % Radial velocity, (ft/s)
+b2 = (GPM * 0.321) / (Cm2 * ((pi * D2) - (Z * t)));     % Blade height (in)
+
+% -- Inlet size --
+
+D1 = ((D2/2) - t) * eta2 * 1.25;    % Inlet diameter (in), corrected later with hub
+
+fprintf('Specific Speed: %.3f \n',Ns);
+fprintf('Impeller Diameter: %.3f in\n',D2);
+fprintf('Inlet Diameter: %.3f in\n',D1);
+fprintf('Tip Speed: %.3f ft/s\n',U2);
+fprintf('Blade Height: %.3f in\n',b2);
+
+% -- velocities --
+
+D2SI = D2 / 39.37;                    % metric conversion (m/s)
+b2SI = b2 / 39.37;                    % metric conversion (m)
+w2 = QSI / (2 * pi * (D2SI/2) * (b2SI));      % Fluid exit velocity (m/s)
+w2t = sind(w2) * beta;                        % Tangential velocity of fluid (m/s)
+
+% -- check pressure gain --
+
+U1 = pi * (D1/12) * RPM / 60;              % Inlet velocity (ft/s)
+C2t = U2 - (Cm2 * cotd(beta));             % Inlet tangential velocity (ft/s)
+C1t = 0;                                   % Assume no swril 
+DP_im = ((rhoSI * 0.06243) * ((U2 * C2t) - (U1 * C1t)) * eta2 / 4633);   % Delta P, Euler pump rise (imperial)
+
+fprintf('Calculated delta P: %.4f psi\n',DP_im);
+fprintf('Expected/Required delta P: %.3f psi\n',dP);
+
+%% More calculations
+
+% -- NPSH --
+
+NPSHa = P_tank - P_vapor / (rhoSI * 0.06243 * 32.22);
