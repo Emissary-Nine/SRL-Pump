@@ -1,66 +1,185 @@
 clc; clear; close all;
 
-% SRL Liquids Pump calculator, written by Carson Gano
+%   SRL Liquids Pump calculator, written by Carson Gano
 %   Define inputs of mass flow, RPM, tank and injector pressure
 %   efficiency, fluid vapor pressure.
-
-%   After running once, a table will be produced of candidate Ku and D2
-%   values which must then be selected in the geometry calc section.
+%
+%   After running once, a table will be produced of candidate Ku (head coeff.)
+%   and D2 (impeller outer diameter) values which must then be selected
+%   in the geometry calc section.
 %   These two variables are interlinked, where Ku falls between a set range
-%   and D2 is calculated based on the given Ku value. 
-
+%   and D2 is calculated based on the given Ku value.
+%
 %   Calculated delta P should be slightly above require delta P, too large
 %   of a difference can lead to inefficiencies in the pump.
+%
+%   This calculator also includes preliminary calculations for:
+%       - Pressure budget
+%       - Pump head and power
+%       - Velocity triangles
+%       - Slip and blockage
+%       - NPSH / cavitation
+%       - Reynolds number
+%       - Shaft torque and diameter
+%       - Impeller rotational stress
+%       - Affinity laws
+%       - Candidate design screening
+%       - Parameter sweeps
+%
+%   NOTE:
+%   Several correlations in this calculator are preliminary design estimates.
+%   They should be replaced with experimentally validated correlations or
+%   manufacturer/test data as the design progresses.
 
 
 %% Design inputs
 
 mdotSI = 1.534;                 % kg/s
-rhoSI = 800;                  % Jet-A at room temp (range 775-840)
-RPM = 30000;                  % RPM
+rhoSI = 800;                   % Jet-A at room temp (range 775-840)
+muSI = 0.0018;                 % Dynamic viscosity, Pa*s (estimate)
+RPM = 35000;                   % RPM
 P_tank = 100;                  % psi
-P_inject = 600;               % psi
-eta = 0.75;                   % Efficiency factor, based on centrifugal pump design (source needed)
+P_inject = 600;                % psi
+eta = 0.48;                    % Overall pump efficiency
 P_vapor = 0.14;               % Jet-A vapor pressure (psi)
+
+% -- Pump design parameters --
+
+eta_h = 0.70;                 % Hydraulic efficiency
+sigma_slip = 0.90;            % Preliminary slip factor
+blockage2 = 0.90;             % Preliminary discharge blockage factor
+blockage1 = 0.90;             % Preliminary inlet blockage factor
+
+% -- Pump efficiency breakdown --
+
+eta_h = 0.70;                  % Hydraulic efficiency
+eta_m = eta / eta_h;           % Approx. mechanical efficiency
+
+% -- Pressure losses (estimates) --
+
+dP_suction = 0;                % Suction-side pressure loss (psi)
+dP_valves = 0;                 % Valve pressure loss (psi)
+dP_discharge = 0;              % Discharge line pressure loss (psi)
+dP_manifold = 0;               % Manifold pressure loss (psi)
+dP_other = 0;                  % Other pressure losses (psi)
+
+% -- NPSH / tank geometry --
+
+z_tank = 0;                    % Tank liquid surface elevation (ft)
+z_inlet = 0;                   % Pump inlet elevation (ft)
+K_suction = 0;                 % Total suction-side minor-loss coefficient
+L_suction = 0;                 % Suction pipe length (ft)
+D_suction = 1;                 % Suction pipe diameter (in)
+
+% -- Geometry / design limits --
+
+U2_max = 500;                  % Maximum desired impeller tip speed (ft/s)
+FoS_min = 2.0;                 % Minimum preliminary structural FoS
+NPSH_margin_min = 2;           % Minimum desired NPSH margin (ft)
+
+% -- Impeller material --
+
+rho_material = 8800;           % kg/m^3, example Cu alloy density
+sigma_y = 250e6;               % Pa, preliminary yield strength
+nu_material = 0.34;            % Poisson ratio
 
 % -- Conversions, constants, and intermittent calcs --
 
-QSI = mdotSI / rhoSI;         % m^3/s 
-mdotI = mdotSI * 2.20462;     % lb/s
-GPM = QSI * 15850.32;         % GPM
-omega = RPM * 0.10472;        % rad/s
-dP = (P_inject - P_tank);     % psi
-SG = rhoSI / (1000);          % SG of input fluid
+gSI = 9.80665;                 % m/s^2
+gUS = 32.174;                  % ft/s^2
+
+QSI = mdotSI / rhoSI;          % m^3/s
+mdotI = mdotSI * 2.20462;      % lb/s
+GPM = QSI * 15850.32;          % GPM
+omega = RPM * 0.10472;         % rad/s
+
+dP_required = (P_inject - P_tank);     % Required pressure rise, psi
+
+% -- Additional pressure budget --
+
+dP_total = dP_required + ...
+           dP_suction + ...
+           dP_valves + ...
+           dP_discharge + ...
+           dP_manifold + ...
+           dP_other;
+
+SG = rhoSI / 1000;             % SG of input fluid
+
 
 %% Calculations
 
-HP = (GPM * (dP))/(1714 * eta);            % Horsepower
-P_kW = (HP * 745) / 1000;                  % kW
-H_ft = (2.31 * (dP)) / SG;                 % ft
+% -- Required pump head --
 
-Ns = (RPM * GPM^0.5) / (H_ft^0.75);        % Specific speed
+H_ft = (2.31 * dP_total) / SG;          % Required pump head, ft
+H_m = H_ft * 0.3048;                     % Required pump head, m
 
-% -- Sizing --
+% -- Hydraulic and shaft power --
 
-Ku_vals = linspace(0.8,1.2,20);            % High head radial is usually 0.8 - 1.1
+dP_Pa = dP_total * 6894.757;             % psi -> Pa
+
+P_hyd = QSI * dP_Pa;                     % Hydraulic power, W
+P_shaft = P_hyd / eta;                   % Required shaft power, W
+
+HP = P_shaft / 745.7;                    % Horsepower
+P_kW = P_shaft / 1000;                   % kW
+
+% -- Shaft torque --
+
+Torque = P_shaft / omega;                % N*m
+
+
+%% Specific Speed
+
+Ns = (RPM * GPM^0.5) / (H_ft^0.75);     % Specific speed
+
+fprintf('\n');
+fprintf('=============================================\n');
+fprintf('        SRL LIQUIDS PUMP CALCULATOR\n');
+fprintf('=============================================\n');
+
+
+%% Pressure Budget
+
+fprintf('\n');
+fprintf('--- Pressure Budget ---\n');
+
+fprintf('Tank pressure:             %.3f psi\n',P_tank);
+fprintf('Required injector pressure: %.3f psi\n',P_inject);
+fprintf('Basic required delta P:    %.3f psi\n',dP_required);
+
+fprintf('Suction losses:            %.3f psi\n',dP_suction);
+fprintf('Valve losses:              %.3f psi\n',dP_valves);
+fprintf('Discharge losses:          %.3f psi\n',dP_discharge);
+fprintf('Manifold losses:            %.3f psi\n',dP_manifold);
+fprintf('Other losses:              %.3f psi\n',dP_other);
+
+fprintf('Total pump delta P:        %.3f psi\n',dP_total);
+fprintf('Required pump head:        %.3f ft\n',H_ft);
+
+
+%% Sizing
+
+Ku_vals = linspace(0.8,1.2,20);
 D2_vals = zeros(size(Ku_vals));            
 U2 = zeros(size(Ku_vals));
 
 for i = 1:length(Ku_vals)
+
     Ku = Ku_vals(i);
-    
-    % Diameter (inches)
-    D2_vals(i) = (1840 * Ku * sqrt(H_ft)) / RPM;
+
+    D2_vals(i) = ...
+        (1840 * Ku * sqrt(H_ft)) / RPM;
+
 end
-
-table(Ku_vals', D2_vals')                 % Display candidate Ku and OD (inch) values
-
 
 for i = 1:length(Ku_vals)
-    U2(i) = (pi * (D2_vals(i)/12) * RPM) / 60;
+
+    U2(i) = ...
+        (pi * (D2_vals(i)/12) * RPM) / 60;
+
 end
 
-table(D2_vals',U2')                       % Diameter (in) and corresponding tip speed (ft/s)
 
 %% Geometry Calculations
 
@@ -69,52 +188,605 @@ table(D2_vals',U2')                       % Diameter (in) and corresponding tip 
 
 % -- Inputs --
 
-o = 3;  % <-- D2 Ku and U2 selection
+o = 3;                         % <-- D2 Ku and U2 selection
+
 D2 = D2_vals(o);
 Ku = Ku_vals(o);
-U2 = U2(o);
-phi = 0.1;                   % Estimate, 0.08-0.15 range, must refine later
-Z = 6;                       % Number of blades
-t = 0.1;                    % Blade thickness (in)
-eta2 = 0.8;                  % Scaling fudge factor for geometry (range 0.8-1.0)
-beta = 45;                   % Impeller blade discharge angle (deg)
+U2_selected = U2(o);
+
+phi = 0.1;                     % Estimate, 0.08-0.15 range, must refine later
+Z = 6;                         % Number of blades
+t = 0.1;                       % Blade thickness (in)
+eta2 = 0.8;                    % Scaling factor for geometry
+beta = 25;                     % Impeller blade discharge angle (deg)
+
+% -- Flow blockage --
+
+blockage2 = 0.90;              % Preliminary discharge blockage factor
+blockage1 = 0.90;              % Preliminary inlet blockage factor
 
 % -- Vane height --
 
-Cm2 = phi*U2;                                           % Radial velocity, (ft/s)
-b2 = (GPM * 0.321) / (Cm2 * ((pi * D2) - (Z * t)));     % Blade height (in)
+Cm2 = phi*U2_selected;         % Radial velocity, ft/s
+
+b2 = (GPM * 0.321) / ...
+    (Cm2 * ((pi * D2) - (Z * t)));     % Blade height (in)
 
 % -- Inlet size --
 
-D1 = ((D2/2) - t) * eta2 * 1.25;    % Inlet diameter (in), corrected later with hub
+D1 = ((D2/2) - t) * eta2 * 1.25;        % Inlet diameter, in
 
-fprintf('Specific Speed: %.3f \n',Ns);
+% Preliminary hub diameter
+
+D1_hub = 0.45 * D1;                     % Hub diameter, in
+D1_tip = D1;                             % Eye tip diameter, in
+
+% -- Metric conversions --
+
+D2SI = D2 / 39.37;                       % m
+b2SI = b2 / 39.37;                       % m
+D1SI = D1 / 39.37;                       % m
+D1_hubSI = D1_hub / 39.37;               % m
+
+r2SI = D2SI / 2;
+r1SI = D1SI / 2;
+
+
+%% Impeller Areas
+
+% -- Outlet flow area --
+
+A2_geom = pi * D2SI * b2SI;              % m^2
+A2 = A2_geom * blockage2;                % Effective flow area
+
+% -- Inlet eye area --
+
+A1_geom = pi/4 * (D1SI^2 - D1_hubSI^2);
+A1 = A1_geom * blockage1;
+
+
+%% Velocity Calculations
+
+% -- Outlet velocity triangle --
+
+Cm2SI = Cm2 * 0.3048;                     % m/s
+
+% Euler velocity triangle
+%
+% C_u2 is obtained from the blade geometry:
+%
+% C_u2 = U2 - Cm2*cot(beta)
+
+U2SI = U2 * 0.3048;                       % m/s
+
+C2t_ideal = U2SI - Cm2SI * cotd(beta);
+
+% Apply slip factor
+
+C2t = sigma_slip * C2t_ideal;
+
+% Absolute exit velocity
+
+C2 = sqrt(Cm2SI^2 + C2t.^2);
+
+% Relative exit velocity
+
+W2 = sqrt(Cm2SI^2 + (U2SI - C2t).^2);
+
+% -- Inlet velocity --
+
+U1 = pi * (D1/12) * RPM / 60;             % Inlet blade speed, ft/s
+U1SI = U1 * 0.3048;                       % m/s
+
+Cm1SI = QSI / A1;                         % Meridional velocity, m/s
+Cm1 = Cm1SI / 0.3048;                     % ft/s
+
+C1t = 0;                                  % Assume no swirl / prewhirl
+
+C1 = sqrt(Cm1SI^2 + C1t^2);
+
+% Relative inlet velocity
+
+W1 = sqrt(Cm1SI^2 + (U1SI - C1t)^2);
+
+% -- Flow angles --
+
+alpha1 = atan2d(C1t,Cm1SI);               % Absolute flow angle
+beta1 = atan2d(Cm1SI,(U1SI-C1t));         % Relative inlet angle
+
+alpha2 = atan2d(C2t,Cm2SI);               % Absolute exit flow angle
+
+beta2_relative = atan2d(Cm2SI,(U2SI-C2t));
+
+
+%% Euler Pump Head
+
+% Euler specific work:
+%
+% Delta h = U2*C_u2 - U1*C_u1
+
+Euler_work = (U2SI .* C2t) - (U1SI * C1t);     % J/kg
+
+Euler_head = Euler_work / gSI;                % m
+Euler_head_ft = Euler_head / 0.3048;          % ft
+
+% Apply hydraulic efficiency
+
+Actual_head = eta_h * Euler_head;             % m
+Actual_head_ft = Actual_head / 0.3048;       % ft
+
+% Predicted pressure rise
+
+DP_im = (rhoSI * gSI * Actual_head) / 6894.757;   % psi
+
+
+%% Pump Head Comparison
+
+head_error = Actual_head_ft - H_ft;
+head_percent = (Actual_head_ft / H_ft) * 100;
+
+pressure_margin = DP_im - dP_total;
+pressure_percent = (DP_im / dP_total) * 100;
+
+
+%% Hydraulic Loss Estimate
+
+% The following is a preliminary estimate of hydraulic losses.
+% Replace with detailed passage/CFD correlations later.
+
+Velocity_head2 = C2.^2 / (2*gSI);           % m
+
+h_internal_loss = Euler_head - Actual_head;
+
+P_loss_hyd = mdotSI * gSI * h_internal_loss;
+
+
+%% Reynolds Number
+
+% Hydraulic diameter approximation
+
+Dh2 = 4*A2 / (pi*D2SI);
+
+Re2 = rhoSI * C2 * Dh2 / muSI;
+
+% Inlet hydraulic diameter
+
+Dh1 = 4*A1 / (pi*(D1SI + D1_hubSI));
+
+Re1 = rhoSI * Cm1SI * Dh1 / muSI;
+
+
+%% NPSH
+
+% -- Tank pressure and vapor pressure --
+
+% Pressure values must be absolute for NPSH calculations.
+
+P_tank_abs_Pa = P_tank * 6894.757;
+P_vapor_Pa = P_vapor * 6894.757;
+
+% Suction line velocity
+
+D_suctionSI = (D_suction / 12) * 0.3048;
+
+A_suction = pi * D_suctionSI^2 / 4;
+
+V_suction = QSI / A_suction;
+
+% Preliminary suction Reynolds number
+
+Re_suction = rhoSI * V_suction * D_suctionSI / muSI;
+
+% Preliminary friction factor
+%
+% Laminar: f = 64/Re
+% Turbulent: Blasius estimate
+
+if Re_suction < 2300
+    f_suction = 64 / Re_suction;
+else
+    f_suction = 0.3164 / Re_suction^0.25;
+end
+
+L_suctionSI = L_suction * 0.3048;
+
+h_f_suction = f_suction * ...
+    (L_suctionSI / D_suctionSI) * ...
+    (V_suction^2 / (2*gSI));
+
+h_minor_suction = K_suction * ...
+    (V_suction^2 / (2*gSI));
+
+h_suction_losses = h_f_suction + h_minor_suction;
+
+% NPSH Available
+
+NPSHa_m = ((P_tank_abs_Pa - P_vapor_Pa) / ...
+    (rhoSI*gSI)) ...
+    - h_suction_losses ...
+    - ((z_inlet - z_tank) * 0.3048);
+
+NPSHa = NPSHa_m / 0.3048;                  % ft
+
+% Preliminary NPSH required estimate
+%
+% This is NOT a replacement for experimental pump data.
+
+NPSHr = 0.05 * H_ft;                       % Preliminary estimate
+
+NPSH_margin = NPSHa - NPSHr;
+
+% Cavitation coefficient
+
+sigma_cav = NPSHa_m ./ max(Actual_head,1e-12);
+
+
+%% Shaft Calculations
+
+% -- Shaft torque --
+
+Torque = P_shaft / omega;                  % N*m
+
+% -- Preliminary shaft diameter --
+
+tau_allow = sigma_y / (sqrt(3) * FoS_min);
+
+d_shaft = ...
+    ((16 * Torque) / (pi * tau_allow))^(1/3);
+
+d_shaft_mm = d_shaft * 1000;
+d_shaft_in = d_shaft * 39.37;
+
+
+%% Preliminary Impeller Stress
+
+% Very preliminary rotating-ring approximation.
+%
+% This is NOT a substitute for FEA.
+
+sigma_rot = rho_material * U2SI.^2;
+
+FoS_rot = sigma_y ./ sigma_rot;
+
+
+%% Affinity Laws
+
+% Used to estimate performance changes with RPM.
+%
+% Q ~ N
+% H ~ N^2
+% P ~ N^3
+
+RPM_vals = linspace(0.5*RPM,RPM,20);
+
+Q_affinity = QSI * (RPM_vals / RPM);
+
+H_affinity = Actual_head .* (RPM_vals / RPM).^2;
+
+P_affinity = P_shaft * (RPM_vals / RPM).^3;
+
+U2_affinity = U2 .* (RPM_vals / RPM);
+
+
+%% Candidate Design Sweep
+
+% Evaluate all candidate Ku values.
+%
+% This allows the calculator to compare candidate impeller sizes
+% without manually changing "o".
+
+D2_sweep = D2_vals;
+U2_sweep = U2;
+
+Cm2_sweep = zeros(size(D2_vals));
+b2_sweep = zeros(size(D2_vals));
+DP_sweep = zeros(size(D2_vals));
+Power_sweep = zeros(size(D2_vals));
+NPSH_sweep = zeros(size(D2_vals));
+FoS_sweep = zeros(size(D2_vals));
+
+for i = 1:length(D2_vals)
+
+    D2_i = D2_vals(i);
+    U2_i = U2(i);
+
+    Cm2_i = phi * U2_i;
+
+    b2_i = (GPM * 0.321) / ...
+        (Cm2_i * ((pi * D2_i) - (Z*t)));
+
+    D2_i_SI = D2_i / 39.37;
+    b2_i_SI = b2_i / 39.37;
+
+    U2_i_SI = U2_i * 0.3048;
+    Cm2_i_SI = Cm2_i * 0.3048;
+
+    C2t_i_ideal = U2_i_SI - ...
+        Cm2_i_SI*cotd(beta);
+
+    C2t_i = sigma_slip * C2t_i_ideal;
+
+    Euler_work_i = U2_i_SI * C2t_i;
+
+    Euler_head_i = Euler_work_i / gSI;
+
+    Actual_head_i = eta_h * Euler_head_i;
+
+    DP_sweep(i) = ...
+        rhoSI*gSI*Actual_head_i / 6894.757;
+
+    Power_sweep(i) = ...
+        (QSI * rhoSI*gSI*Actual_head_i) / eta;
+
+    % Preliminary stress estimate
+
+    sigma_rot_i = rho_material * U2_i_SI^2;
+
+    FoS_sweep(i) = sigma_y / sigma_rot_i;
+
+    % Same NPSHa assumption for each candidate
+
+    NPSH_sweep(i) = NPSHa;
+
+end
+
+%% Candidate Design Table
+
+candidate_table = table( ...
+    Ku_vals', ...
+    D2_sweep', ...
+    U2_sweep', ...
+    b2_sweep', ...
+    DP_sweep', ...
+    Power_sweep'/1000, ...
+    NPSH_sweep', ...
+    FoS_sweep', ...
+    'VariableNames', ...
+    {'Ku','D2_in','U2_ft_s','b2_in',...
+    'DeltaP_psi','Power_kW','NPSHa_ft','FoS'});
+
+disp(candidate_table);
+
+
+%% Candidate Design Screening
+
+pressure_ok = DP_sweep >= dP_total;
+speed_ok = U2_sweep <= U2_max;
+stress_ok = FoS_sweep >= FoS_min;
+npsh_ok = NPSH_sweep >= NPSH_margin_min;
+
+all_ok = pressure_ok & speed_ok & stress_ok & npsh_ok;
+
+candidate_table.Pass = all_ok';
+
+fprintf('\n');
+fprintf('--- Candidate Screening ---\n');
+
+if any(all_ok)
+
+    fprintf('Design candidates passing preliminary checks:\n');
+
+    for i = 1:length(Ku_vals)
+
+        if all_ok(i)
+
+            fprintf(['Ku = %.3f | D2 = %.3f in | ', ...
+                'U2 = %.2f ft/s | DeltaP = %.2f psi | ', ...
+                'FoS = %.2f\n'], ...
+                Ku_vals(i), ...
+                D2_sweep(i), ...
+                U2_sweep(i), ...
+                DP_sweep(i), ...
+                FoS_sweep(i));
+
+        end
+
+    end
+
+else
+
+    fprintf('No candidate currently passes all preliminary checks.\n');
+
+end
+
+
+%% Outputs
+
+fprintf('\n');
+fprintf('=============================================\n');
+fprintf('             SELECTED DESIGN\n');
+fprintf('=============================================\n');
+
+fprintf('Mass flow: %.4f kg/s\n',mdotSI);
+fprintf('Volumetric flow: %.6f m^3/s\n',QSI);
+fprintf('Flow rate: %.3f GPM\n',GPM);
+fprintf('Density: %.2f kg/m^3\n',rhoSI);
+fprintf('RPM: %.0f\n',RPM);
+
+fprintf('\n');
+
+fprintf('Specific Speed: %.3f\n',Ns);
+
 fprintf('Impeller Diameter: %.3f in\n',D2);
 fprintf('Inlet Diameter: %.3f in\n',D1);
+fprintf('Hub Diameter: %.3f in\n',D1_hub);
+
 fprintf('Tip Speed: %.3f ft/s\n',U2);
 fprintf('Blade Height: %.3f in\n',b2);
 
-% -- velocities --
+fprintf('\n');
 
-D2SI = D2 / 39.37;                    % metric conversion (m/s)
-b2SI = b2 / 39.37;                    % metric conversion (m)
-w2 = QSI / (2 * pi * (D2SI/2) * (b2SI));      % Fluid exit velocity (m/s)
-w2t = sind(w2) * beta;                        % Tangential velocity of fluid (m/s)
-
-% -- check pressure gain --
-
-U1 = pi * (D1/12) * RPM / 60;              % Inlet velocity (ft/s)
-C2t = U2 - (Cm2 * cotd(beta));             % Inlet tangential velocity (ft/s)
-C1t = 0;                                   % Assume no swril 
-DP_im = ((rhoSI * 0.06243) * ((U2 * C2t) - (U1 * C1t)) * eta2 / 4633);   % Delta P, Euler pump rise (imperial)
+fprintf('Required delta P: %.3f psi\n',dP_total);
+fprintf('Euler head: %.3f ft\n',Euler_head_ft);
+fprintf('Actual predicted head: %.3f ft\n',Actual_head_ft);
 
 fprintf('Calculated delta P: %.4f psi\n',DP_im);
-fprintf('Expected/Required delta P: %.3f psi\n',dP);
-fprintf('Required Power: %.3f (HP)\n', HP);
-fprintf('Required Power: %.3f (kW)\n', P_kW);
+fprintf('Expected/Required delta P: %.3f psi\n',dP_total);
 
-%% More calculations
+fprintf('Pressure margin: %.3f psi\n',pressure_margin);
+fprintf('Pressure ratio: %.2f %%\n',pressure_percent);
 
-% -- NPSH --
+fprintf('\n');
 
-NPSHa = P_tank - P_vapor / (rhoSI * 0.06243 * 32.22);
+fprintf('Hydraulic Power: %.3f kW\n',P_hyd/1000);
+fprintf('Required Power: %.3f HP\n',HP);
+fprintf('Required Power: %.3f kW\n',P_kW);
+fprintf('Shaft Torque: %.3f N*m\n',Torque);
+
+fprintf('\n');
+
+fprintf('Outlet meridional velocity: %.3f m/s\n',Cm2SI);
+fprintf('Outlet tangential velocity: %.3f m/s\n',C2t);
+fprintf('Outlet absolute velocity: %.3f m/s\n',C2);
+fprintf('Outlet relative velocity: %.3f m/s\n',W2);
+
+fprintf('Inlet meridional velocity: %.3f m/s\n',Cm1SI);
+fprintf('Inlet relative velocity: %.3f m/s\n',W1);
+
+fprintf('\n');
+
+fprintf('Inlet flow angle: %.3f deg\n',alpha1);
+fprintf('Inlet blade angle: %.3f deg\n',beta1);
+fprintf('Outlet flow angle: %.3f deg\n',alpha2);
+fprintf('Outlet relative blade angle: %.3f deg\n',beta2_relative);
+
+fprintf('\n');
+
+fprintf('Reynolds number - inlet: %.3e\n',Re1);
+fprintf('Reynolds number - outlet: %.3e\n',Re2);
+
+fprintf('\n');
+
+fprintf('NPSH Available: %.3f ft\n',NPSHa);
+fprintf('NPSH Required: %.3f ft\n',NPSHr);
+fprintf('NPSH Margin: %.3f ft\n',NPSH_margin);
+fprintf('Cavitation coefficient: %.5f\n',sigma_cav);
+
+fprintf('\n');
+
+fprintf('Preliminary shaft diameter: %.3f mm\n',d_shaft_mm);
+fprintf('Preliminary shaft diameter: %.3f in\n',d_shaft_in);
+
+fprintf('Estimated rotational stress: %.3f MPa\n',sigma_rot/1e6);
+fprintf('Preliminary rotational FoS: %.3f\n',FoS_rot);
+
+
+%% Final Preliminary Design Check
+
+fprintf('\n');
+fprintf('=============================================\n');
+fprintf('          PRELIMINARY DESIGN CHECK\n');
+fprintf('=============================================\n');
+
+if DP_im >= dP_total
+    fprintf('Pressure rise:             PASS\n');
+else
+    fprintf('Pressure rise:             CHECK\n');
+end
+
+if U2 <= U2_max
+    fprintf('Impeller tip speed:        PASS\n');
+else
+    fprintf('Impeller tip speed:        CHECK\n');
+end
+
+if NPSHa >= NPSHr
+    fprintf('NPSH:                      PASS\n');
+else
+    fprintf('NPSH:                      CHECK\n');
+end
+
+if FoS_rot >= FoS_min
+    fprintf('Rotational stress:         PASS\n');
+else
+    fprintf('Rotational stress:         CHECK\n');
+end
+
+if NPSH_margin >= NPSH_margin_min
+    fprintf('NPSH margin:               PASS\n');
+else
+    fprintf('NPSH margin:               CHECK\n');
+end
+
+
+%% Performance Plots
+
+% -- Candidate diameter vs Ku --
+
+figure;
+
+plot(Ku_vals,D2_vals,'-o','LineWidth',1.5);
+
+xlabel('Ku');
+ylabel('Impeller Diameter D2 (in)');
+title('Impeller Diameter vs Ku');
+grid on;
+
+
+% -- Tip speed vs Ku --
+
+figure;
+
+plot(Ku_vals,U2,'-o','LineWidth',1.5);
+
+xlabel('Ku');
+ylabel('Tip Speed U2 (ft/s)');
+title('Impeller Tip Speed vs Ku');
+grid on;
+
+
+% -- Predicted pressure rise vs Ku --
+
+figure;
+
+plot(Ku_vals,DP_sweep,'-o','LineWidth',1.5);
+hold on;
+
+yline(dP_total,'--','Required \DeltaP');
+
+xlabel('Ku');
+ylabel('\DeltaP (psi)');
+title('Predicted Pump Pressure Rise');
+grid on;
+
+
+% -- Power vs Ku --
+
+figure;
+
+plot(Ku_vals,Power_sweep/1000,'-o','LineWidth',1.5);
+
+xlabel('Ku');
+ylabel('Shaft Power (kW)');
+title('Required Shaft Power vs Ku');
+grid on;
+
+
+% -- Affinity laws --
+
+figure;
+
+plot(RPM_vals,H_affinity/0.3048,'-o','LineWidth',1.5);
+
+xlabel('RPM');
+ylabel('Head (ft)');
+title('Pump Head vs RPM');
+grid on;
+
+
+figure;
+
+plot(RPM_vals,P_affinity/1000,'-o','LineWidth',1.5);
+
+xlabel('RPM');
+ylabel('Shaft Power (kW)');
+title('Pump Power vs RPM');
+grid on;
+
+
+%% End
+
+fprintf('\n');
+fprintf('=============================================\n');
+fprintf('Calculation complete.\n');
+fprintf('=============================================\n');
