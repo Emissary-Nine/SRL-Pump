@@ -2,7 +2,7 @@ clc; clear; close all;
 
 %   SRL Liquids Pump calculator, written by Carson Gano
 %   Define inputs of mass flow, RPM, tank and injector pressure
-%   efficiency, fluid vapor pressure.
+%   efficiency, fluid vapor pressure, etc.
 %
 %   After running once, a table will be produced of candidate Ku (head coeff.)
 %   and D2 (impeller outer diameter) values which must then be selected
@@ -38,21 +38,17 @@ mdotSI = 1.534;                 % kg/s
 rhoSI = 800;                   % Jet-A at room temp (range 775-840)
 muSI = 0.0018;                 % Dynamic viscosity, Pa*s (estimate)
 RPM = 35000;                   % RPM
-P_tank = 100;                  % psi
+P_tank = 120;                  % psi
 P_inject = 600;                % psi
-eta = 0.48;                    % Overall pump efficiency
+eta = 0.55;                    % Overall pump efficiency
 P_vapor = 0.14;               % Jet-A vapor pressure (psi)
 
 % -- Pump design parameters --
 
-eta_h = 0.70;                 % Hydraulic efficiency
+eta_h = 0.55;                 % Hydraulic efficiency
 sigma_slip = 0.90;            % Preliminary slip factor
 blockage2 = 0.90;             % Preliminary discharge blockage factor
 blockage1 = 0.90;             % Preliminary inlet blockage factor
-
-% -- Pump efficiency breakdown --
-
-eta_h = 0.70;                  % Hydraulic efficiency
 eta_m = eta / eta_h;           % Approx. mechanical efficiency
 
 % -- Pressure losses (estimates) --
@@ -65,10 +61,10 @@ dP_other = 25;                  % Other pressure losses (psi)
 
 % -- NPSH / tank geometry --
 
-z_tank = 0;                    % Tank liquid surface elevation (ft)
-z_inlet = 0;                   % Pump inlet elevation (ft)
+z_tank = 2;                    % Tank liquid surface elevation (ft)
+z_inlet = 1;                   % Pump inlet elevation (ft)
 K_suction = 0;                 % Total suction-side minor-loss coefficient
-L_suction = 0;                 % Suction pipe length (ft)
+L_suction = 4;                 % Suction pipe length (ft)
 D_suction = 1;                 % Suction pipe diameter (in)
 
 % -- Geometry / design limits --
@@ -79,9 +75,9 @@ NPSH_margin_min = 2;           % Minimum desired NPSH margin (ft)
 
 % -- Impeller material --
 
-rho_material = 8800;           % kg/m^3, example Cu alloy density
-sigma_y = 250e6;               % Pa, preliminary yield strength
-nu_material = 0.34;            % Poisson ratio
+rho_material = 8200;           % kg/m^3, Using INCONEL 718
+sigma_y = 1034e6;               % Pa, preliminary yield strength
+nu_material = 0.284;            % Poisson ratio
 
 % -- Conversions, constants, and intermittent calcs --
 
@@ -160,7 +156,7 @@ fprintf('Required pump head:        %.3f ft\n',H_ft);
 
 %% Sizing
 
-Ku_vals = linspace(0.8,1.2,20);
+Ku_vals = linspace(0.8,1.3,25);
 D2_vals = zeros(size(Ku_vals));            
 U2 = zeros(size(Ku_vals));
 
@@ -257,7 +253,7 @@ Cm2SI = Cm2 * 0.3048;                     % m/s
 %
 % C_u2 = U2 - Cm2*cot(beta)
 
-U2SI = U2 * 0.3048;                       % m/s
+U2SI = U2 * 0.3048;                       % m/s (Tip speed)
 
 C2t_ideal = U2SI - Cm2SI * cotd(beta);
 
@@ -440,11 +436,11 @@ d_shaft_in = d_shaft * 39.37;
 
 %% Preliminary Impeller Stress
 
-% Very preliminary rotating-ring approximation.
+% Very preliminary rotating-ring!!! approximation.
 %
 % This is NOT a substitute for FEA.
 
-sigma_rot = rho_material * U2SI.^2;
+sigma_rot = rho_material * U2SI.^2; 
 
 FoS_rot = sigma_y ./ sigma_rot;
 
@@ -457,7 +453,7 @@ FoS_rot = sigma_y ./ sigma_rot;
 % H ~ N^2
 % P ~ N^3
 
-RPM_vals = linspace(0.5*RPM,RPM,20);
+RPM_vals = linspace(0.5*RPM,RPM,25);
 
 Q_affinity = QSI * (RPM_vals / RPM);
 
